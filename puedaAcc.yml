@@ -1,1 +1,61 @@
+name: Compilación y depliegue
 
+on:
+  push:
+    branches:
+      - development
+
+jobs:
+  deploy:
+    name: Compilación y despliegue (Desarrollo)
+    runs-on: ubuntu-latest
+    env:
+      NGINX_INTERNAL_IP: 172.18.1.3
+      FPM_INTERNAL_IP: 172.18.1.2
+      INTERNAL_NETWORK_NAME: intt-dev
+      FPM_IMAGE_NAME: dev/intt/fpm
+      NGINX_IMAGE_NAME: dev/intt/nginx
+      FPM_CONTAINER_NAME: dev-intt-fpm
+      NGINX_CONTAINER_NAME: dev-intt-nginx
+      DB_DATABASE: intt-dev
+    steps:
+      - uses: act10ns/slack@v2
+        name: Notificando inicio
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: 'Iniciando despliegue de API'
+          status: starting
+          channel: '#workflows'
+        if: always()
+      - uses: actions/checkout@v3
+      - name: Configurando SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -t rsa ${{ secrets.REMOTE_SERVER_HOST }} >> ~/.ssh/known_hosts
+      - name: Instalando dependencias
+        run: |
+          sudo apt-get install --yes --no-install-recommends postgresql-client php8.1-cli unzip
+          curl -sS https://getcomposer.org/installer -o composer-setup.php
+          sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+          composer install
+      - name: Ejecutando generadores
+        run: php artisan intt:generate:requests
+      - name: Efectuando verificación estática
+        run: vendor/bin/phpstan analyse
+      - name: Generando documentación swagger
+        env:
+          L5_SWAGGER_CONST_HOST: https://dev.${{ secrets.REMOTE_SERVER_HOST }}
+        run: php artisan l5-swagger:generate
+      - name: Aplicando migracions & semillas
+        env:
+          DB_HOST: localhost
+          DB_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          DB_USERNAME: postgres
+          APP_DEBUG: true
+          APP_ENV: local
+        run: |
+          ssh -fN -L 5432:${{ secrets.REMOTE_SERVER_HOST }}:5432 ${{ secrets.REMOTE_SERVER_USER }}@${{ secrets.REMOTE_SERVER_HOST }}
+          php artisan migrate
+          php artisan db:seed
