@@ -1,1 +1,58 @@
+name: Control de calidad
 
+on:
+  pull_request:
+    branches:
+      - development
+
+jobs:
+  deploy:
+    name: Control de calidad
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Instalando dependencias
+        run: |
+          sudo apt-get install --yes --no-install-recommends postgresql-client php8.1-cli unzip
+          curl -sS https://getcomposer.org/installer -o composer-setup.php
+          sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+          composer install
+      - name: Ejecutando generadores
+        run: php artisan intt:generate:requests
+      - name: Efectuando verificación estática
+        run: vendor/bin/phpstan analyse
+      - name: Crear base de datos de pruebas
+        run: createdb -h localhost -U postgres intt
+      - name: Generando documentación swagger
+        run: php artisan l5-swagger:generate
+      - name: Aplicando migraciones y seeders
+        env:
+          DB_PASSWORD: ''
+          DB_HOST: localhost
+          DB_DATABASE: intt
+          DB_USERNAME: postgres
+          APP_DEBUG: true
+          APP_ENV: local
+        run: |
+          php artisan migrate
+          php artisan db:seed
+      - name: Creando ambiente de despliegue
+        run: |
+          mv .env.deploy .env
+          echo "DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}" >> .env
+          echo "DB_HOST=host.docker.internal" >> .env
+          echo >> .env
+    services:
+      postgres:
+        image: postgres
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
