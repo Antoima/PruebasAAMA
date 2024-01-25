@@ -1,36 +1,58 @@
-# This is a basic workflow to help you get started with Actions
+name: Control de calidad
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - development
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  deploy:
+    name: Control de calidad
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Instalando dependencias
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          sudo apt-get install --yes --no-install-recommends postgresql-client php8.1-cli unzip
+          curl -sS https://getcomposer.org/installer -o composer-setup.php
+          sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+          composer install
+      - name: Ejecutando generadores
+        run: php artisan intt:generate:requests
+      - name: Efectuando verificación estática
+        run: vendor/bin/phpstan analyse
+      - name: Crear base de datos de pruebas
+        run: createdb -h localhost -U postgres intt
+      - name: Generando documentación swagger
+        run: php artisan l5-swagger:generate
+      - name: Aplicando migraciones y seeders
+        env:
+          DB_PASSWORD: ''
+          DB_HOST: localhost
+          DB_DATABASE: intt
+          DB_USERNAME: postgres
+          APP_DEBUG: true
+          APP_ENV: local
+        run: |
+          php artisan migrate
+          php artisan db:seed
+      - name: Creando ambiente de despliegue
+        run: |
+          mv .env.deploy .env
+          echo "DB_PASSWORD=${{ secrets.DATABASE_PASSWORD }}" >> .env
+          echo "DB_HOST=host.docker.internal" >> .env
+          echo >> .env
+    services:
+      postgres:
+        image: postgres
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
